@@ -1,0 +1,7 @@
+[general]
+name=Grenzpunkt-Foto
+description=Foto aufnehmen, Grenzpunkt aus dem ALKIS-Layer wählen – das Foto bekommt genau dessen Koordinaten als EXIF-Geotag und wird nach der Punktkennung benannt
+author=Lukas Helmke
+icon=icon.svg
+version=1.0
+homepage=https://portal.lhelmke.de
