@@ -25,13 +25,13 @@ Item {
   property var positionSource: iface.findItemByObjectName('positionSource')
 
   readonly property string settingsPrefix: "grenzpunktFoto/"
-  readonly property real searchRadius: 60          // Meter um die aktuelle Position
-  readonly property int maxCandidates: 8
+  readonly property real tapTolerance: 30          // Pixel um den Antipp-Punkt
 
   property var pointLayer: null
   property string idField: ""
+  property bool pickMode: false
+  property var pendingPoint: null
   property string pendingPhoto: ""
-  property string referenceText: ""
 
   Component.onCompleted: {
     iface.addItemToPluginsToolbar(photoButton)
@@ -137,39 +137,32 @@ Item {
     return Number(v).toFixed(dec).replace(".", ",")
   }
 
-  // Bezugsposition im KBS des Punkte-Layers: GNSS, sonst Kartenmitte
-  function referencePoint() {
-    const crs = pointLayer.crs
-    if (positionSource && positionSource.active) {
-      const pi = positionSource.positionInformation
-      if (pi && pi.latitudeValid && pi.longitudeValid) {
-        referenceText = qsTr("zur aktuellen Position")
-        return GeometryUtils.reprojectPoint(GeometryUtils.point(pi.longitude, pi.latitude), CoordinateReferenceSystemUtils.wgs84Crs(), crs)
-      }
-    }
+  // Nächstgelegenen Punkt des Layers zu einer Bildschirmposition (in Pixeln der Karte) suchen
+  function pickPointAt(screenX, screenY) {
     const ms = iface.mapCanvas().mapSettings
-    referenceText = qsTr("zur Kartenmitte (keine Position)")
-    return GeometryUtils.reprojectPoint(ms.center, ms.destinationCrs, crs)
-  }
+    const crs = pointLayer.crs
+    const tap = GeometryUtils.reprojectPoint(ms.screenToCoordinate(Qt.point(screenX, screenY)), ms.destinationCrs, crs)
+    const edge = GeometryUtils.reprojectPoint(ms.screenToCoordinate(Qt.point(screenX + tapTolerance, screenY)), ms.destinationCrs, crs)
+    const r = GeometryUtils.distanceBetweenPoints(tap, edge)
 
-  function findCandidates() {
-    const ref = referencePoint()
-    const r = searchRadius
-    const rect = GeometryUtils.createRectangleFromPoints(GeometryUtils.point(ref.x - r, ref.y - r), GeometryUtils.point(ref.x + r, ref.y + r))
+    const rect = GeometryUtils.createRectangleFromPoints(GeometryUtils.point(tap.x - r, tap.y - r), GeometryUtils.point(tap.x + r, tap.y + r))
     const it = LayerUtils.createFeatureIteratorFromRectangle(pointLayer, rect)
-    const list = []
+    let best = null
+    let bestDist = Infinity
     while (it.hasNext()) {
       const f = it.next()
       const p = GeometryUtils.centroid(f.geometry)
-      const d = GeometryUtils.distanceBetweenPoints(ref, p)
-      let label = idField !== "" ? f.attribute(idField) : ""
-      if (label === undefined || label === null || String(label) === "" || String(label) === "NULL")
-        label = "FID " + f.id
-      list.push({ label: String(label), x: p.x, y: p.y, distance: d })
+      const d = GeometryUtils.distanceBetweenPoints(tap, p)
+      if (d < bestDist) {
+        let label = idField !== "" ? f.attribute(idField) : ""
+        if (label === undefined || label === null || String(label) === "" || String(label) === "NULL")
+          label = "FID " + f.id
+        best = { label: String(label), x: p.x, y: p.y }
+        bestDist = d
+      }
     }
     it.close()
-    list.sort((a, b) => a.distance - b.distance)
-    return list.slice(0, maxCandidates)
+    return best
   }
 
   function assignPhoto(cand) {
@@ -204,6 +197,7 @@ Item {
     const target = home + "/DCIM/Grenzpunkte/" + sanitize(cand.label) + "_" + timestamp() + "." + suffix
     const ok = platformUtilities.renameFile(path, target)
     pendingPhoto = ""
+    pendingPoint = null
     toast(ok ? qsTr("Foto Grenzpunkt %1 zugeordnet").arg(cand.label) : qsTr("Foto zugeordnet, Umbenennen fehlgeschlagen"), ok ? 'info' : 'warning')
   }
 
@@ -216,7 +210,7 @@ Item {
       openLayerChooser()
       return
     }
-    cameraLoader.active = true
+    pickMode = !pickMode
   }
 
   function openLayerChooser() {
@@ -267,112 +261,70 @@ Item {
         onFinished: path => {
           close()
           plugin.pendingPhoto = path
-          candidateModel.clear()
-          const cands = plugin.findCandidates()
-          for (const c of cands)
-            candidateModel.append(c)
-          if (cands.length === 0) {
-            plugin.toast(qsTr("Kein Grenzpunkt im Umkreis von %1 m – Foto liegt unzugeordnet in DCIM").arg(plugin.searchRadius), 'warning')
-            plugin.pendingPhoto = ""
-            return
-          }
-          pickPopup.open()
+          plugin.assignPhoto(plugin.pendingPoint)
         }
 
-        onCanceled: close()
+        onCanceled: {
+          plugin.pendingPoint = null
+          close()
+        }
         onClosed: cameraLoader.active = false
       }
     }
   }
 
-  // ------------------------------------------------------------------ Punktauswahl
+  // ------------------------------------------------------------------ Punkt antippen
 
-  ListModel {
-    id: candidateModel
-  }
-
-  QfPopup {
-    id: pickPopup
+  // Fängt Taps nur im Auswahlmodus ab (passiver Grab, Karte lässt sich weiter schwenken/zoomen)
+  Item {
+    id: pickOverlay
     parent: plugin.mainWindow.contentItem
-    width: Math.min(420, plugin.mainWindow.width - 24)
-    height: Math.min(pickColumn.implicitHeight + 32, plugin.mainWindow.height - 48)
-    x: (plugin.mainWindow.width - width) / 2
-    y: Math.max(24, (plugin.mainWindow.height - height) / 2)
-    padding: 16
-    modal: true
-    closePolicy: Popup.CloseOnEscape
+    anchors.fill: parent
+    z: 1000
+    visible: plugin.pickMode
 
-    onClosed: {
-      if (plugin.pendingPhoto !== "") {
-        plugin.toast(qsTr("Keine Zuordnung – Foto liegt unzugeordnet in DCIM"), 'warning')
-        plugin.pendingPhoto = ""
+    TapHandler {
+      enabled: plugin.pickMode
+      onTapped: eventPoint => {
+        const p = pickOverlay.mapToItem(iface.mapCanvas(), eventPoint.position.x, eventPoint.position.y)
+        const cand = plugin.pickPointAt(p.x, p.y)
+        if (!cand) {
+          plugin.toast(qsTr("Kein Punkt getroffen – näher an den Punkt tippen"), 'warning')
+          return
+        }
+        plugin.pickMode = false
+        plugin.pendingPoint = cand
+        cameraLoader.active = true
       }
     }
 
-    ColumnLayout {
-      id: pickColumn
-      anchors.fill: parent
-      spacing: 8
-
-      Label {
-        Layout.fillWidth: true
-        text: qsTr("Grenzpunkt zuordnen")
-        font: Theme.strongFont
-        color: Theme.mainTextColor
-      }
-      Label {
-        Layout.fillWidth: true
-        text: qsTr("Nächste Punkte %1 · %2").arg(plugin.referenceText).arg(plugin.pointLayer ? plugin.pointLayer.name : "")
-        font: Theme.tipFont
-        color: Theme.secondaryTextColor
-        wrapMode: Text.WordWrap
-      }
-
-      ListView {
-        id: candidateList
-        Layout.fillWidth: true
-        Layout.preferredHeight: Math.min(contentHeight, 360)
-        clip: true
-        model: candidateModel
-        spacing: 6
-        delegate: QfButton {
-          required property int index
-          required property string label
-          required property real distance
-          width: candidateList.width
-          text: label + "   ·   " + (distance < 10 ? plugin.fmt(distance, 2) : plugin.fmt(distance, 0)) + " m"
-          bgcolor: index === 0 ? Theme.mainColor : "transparent"
-          color: index === 0 ? "white" : Theme.mainTextColor
-          borderColor: Theme.mainColor
-          onClicked: {
-            plugin.assignPhoto(candidateModel.get(index))
-            pickPopup.close()
-          }
-        }
-      }
+    Rectangle {
+      anchors.top: parent.top
+      anchors.horizontalCenter: parent.horizontalCenter
+      anchors.topMargin: 56
+      width: Math.min(360, parent.width - 24)
+      height: bannerRow.implicitHeight + 16
+      radius: 8
+      color: Theme.darkGray
 
       RowLayout {
-        Layout.fillWidth: true
+        id: bannerRow
+        anchors.fill: parent
+        anchors.margins: 8
+        spacing: 8
         Label {
           Layout.fillWidth: true
-          text: qsTr("Punkt und Koordinaten ins Foto stempeln")
+          text: qsTr("Grenzpunkt antippen (%1)").arg(plugin.pointLayer ? plugin.pointLayer.name : "")
           font: Theme.defaultFont
-          color: Theme.mainTextColor
+          color: "white"
           wrapMode: Text.WordWrap
         }
-        QfSwitch {
-          id: stampSwitch
-          checked: settings.valueBool(plugin.settingsPrefix + "stamp", true)
-          onToggled: settings.setValue(plugin.settingsPrefix + "stamp", checked)
+        QfButton {
+          text: qsTr("Abbrechen")
+          bgcolor: "transparent"
+          color: "white"
+          onClicked: plugin.pickMode = false
         }
-      }
-
-      QfButton {
-        Layout.fillWidth: true
-        text: qsTr("Abbrechen")
-        bgcolor: "transparent"
-        color: Theme.secondaryTextColor
-        onClicked: pickPopup.close()
       }
     }
   }
@@ -411,6 +363,21 @@ Item {
         model: layerModel
         textRole: "name"
         font: Theme.defaultFont
+      }
+      RowLayout {
+        Layout.fillWidth: true
+        Label {
+          Layout.fillWidth: true
+          text: qsTr("Punkt und Koordinaten ins Foto stempeln")
+          font: Theme.defaultFont
+          color: Theme.mainTextColor
+          wrapMode: Text.WordWrap
+        }
+        QfSwitch {
+          id: stampSwitch
+          checked: settings.valueBool(plugin.settingsPrefix + "stamp", true)
+          onToggled: settings.setValue(plugin.settingsPrefix + "stamp", checked)
+        }
       }
       Label {
         Layout.fillWidth: true

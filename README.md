@@ -3,15 +3,15 @@
 Foto aufnehmen → Grenzpunkt aus dem ALKIS-Layer wählen → das Foto bekommt **genau die Koordinaten dieses Punktes** als EXIF-Geotag.
 
 ## Ablauf im Feld
-1. Kamera-Knopf in der Plugin-Leiste antippen, Foto machen, bestätigen.
-2. Liste der nächsten Grenzpunkte (bis 60 m um die aktuelle RTK-Position, ohne Position um die Kartenmitte) – der nächste ist grün hervorgehoben. Antippen.
-3. Fertig: Das Foto liegt als `DCIM/Grenzpunkte/<Punktkennung>_<Datum_Zeit>.jpg` im Projektordner,
+1. Kamera-Knopf in der Plugin-Leiste antippen (Auswahlmodus, oben erscheint ein Hinweis).
+2. Grenzpunkt in der Karte antippen – der nächste Punkt im Umkreis von ca. 30 px wird gewählt, die Kamera öffnet sich.
+3. Foto machen, bestätigen. Fertig: Das Foto liegt als `DCIM/Grenzpunkte/<Punktkennung>_<Datum_Zeit>.jpg` im Projektordner,
    mit den Punktkoordinaten im EXIF und – wenn eingeschaltet – mit Stempel „Grenzpunkt …, E/N, KBS, Datum“ im Bild.
 
 ## Einstellungen
 - **Grenzpunkte-Layer:** wird beim ersten Mal erraten (Feld `pkn` bzw. Layername „Grenzpunkt…“) und pro Projekt gemerkt. Ändern: Kamera-Knopf **lange drücken**.
 - **Punktkennung:** Feld `pkn`, sonst `punktkennung`, `punkt`, `name`, `nr`, `id`, sonst Feature-ID.
-- **Stempel** ein/aus: Schalter im Auswahl-Dialog (wird gemerkt).
+- **Stempel** ein/aus: Schalter im Layer-Dialog (Kamera-Knopf lange drücken, wird gemerkt).
 
 ## Zusammenspiel mit dem QGIS-Plugin „Absteckprotokoll“
 Fotos aus `DCIM/Grenzpunkte` einfach als Foto-Ordner hinzufügen – die Zuordnung klappt über die Punktkennung im Dateinamen
